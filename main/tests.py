@@ -1,9 +1,12 @@
+from http import HTTPStatus
+
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 
 from .models import Project, Skill
 
 User = get_user_model()
+JSON_CONTENT_TYPE = "application/json"
 
 
 class TeamFinderTests(TestCase):
@@ -27,10 +30,10 @@ class TeamFinderTests(TestCase):
             name="P1",
             description="d",
             owner=self.user,
-            status="open",
+            status=Project.Status.OPEN,
         )
         r = self.client.get("/projects/list/")
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, HTTPStatus.OK)
 
     def test_register_login_flow(self):
         r = self.client.post(
@@ -43,7 +46,7 @@ class TeamFinderTests(TestCase):
             },
             follow=True,
         )
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, HTTPStatus.OK)
         u = User.objects.get(email="new@new.com")
         self.assertTrue(u.check_password("secret123"))
 
@@ -51,7 +54,7 @@ class TeamFinderTests(TestCase):
         s = Skill.objects.create(name="Django")
         self.user.skills.add(s)
         r = self.client.get("/users/list/", {"skill": "Django"})
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, HTTPStatus.OK)
         self.assertContains(r, "Ann")
 
     def test_toggle_participate(self):
@@ -59,13 +62,13 @@ class TeamFinderTests(TestCase):
             name="Open",
             description="",
             owner=self.other,
-            status="open",
+            status=Project.Status.OPEN,
         )
         p.participants.add(self.other)
         self.client.login(username="a@a.com", password="pass12345")
         r = self.client.post(
             f"/projects/{p.pk}/toggle-participate/",
-            content_type="application/json",
+            content_type=JSON_CONTENT_TYPE,
         )
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, HTTPStatus.OK)
         self.assertTrue(p.participants.filter(pk=self.user.pk).exists())

@@ -1,9 +1,8 @@
 import json
+from http import HTTPStatus
 
 from django.contrib.auth import login, logout
 from django.contrib.auth.decorators import login_required
-from django.core.paginator import Paginator
-from django.db import IntegrityError
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
@@ -16,6 +15,17 @@ from .forms import (
     UserPasswordChangeForm,
 )
 from .models import Project, Skill, User
+from .utils import paginate_queryset
+
+SKILLS_AUTOCOMPLETE_LIMIT = 10
+JSON_CONTENT_TYPE = "application/json"
+EMPTY_JSON_OBJECT = "{}"
+RESPONSE_STATUS_KEY = "status"
+RESPONSE_ERROR = "error"
+RESPONSE_OK = "ok"
+ERROR_FORBIDDEN = "forbidden"
+ERROR_BAD_REQUEST = "bad request"
+ERROR_NOT_FOUND = "not found"
 
 
 def index_redirect(request):
@@ -26,8 +36,7 @@ def project_list(request):
     qs = Project.objects.select_related("owner").prefetch_related("participants").order_by(
         "-created_at"
     )
-    paginator = Paginator(qs, 12)
-    page = paginator.get_page(request.GET.get("page") or 1)
+    page = paginate_queryset(request, qs)
     return render(request, "projects/project_list.html", {"projects": page, "page_obj": page})
 
 
@@ -43,11 +52,13 @@ def project_detail(request, pk):
 @login_required
 def project_complete(request, pk):
     project = get_object_or_404(Project, pk=pk)
-    if project.owner_id != request.user.id or project.status != "open":
-        return JsonResponse({"status": "error"}, status=403)
-    project.status = "closed"
-    project.save(update_fields=["status"])
-    return JsonResponse({"status": "ok", "project_status": "closed"})
+    if project.owner_id != request.user.id or project.status != Project.Status.OPEN:
+        return JsonResponse({RESPONSE_STATUS_KEY: RESPONSE_ERROR}, status=HTTPStatus.FORBIDDEN)
+    project.status = Project.Status.CLOSED
+    project.save(update_fields=[RESPONSE_STATUS_KEY])
+    return JsonResponse(
+        {RESPONSE_STATUS_KEY: RESPONSE_OK, "project_status": Project.Status.CLOSED}
+    )
 
 
 @require_POST
@@ -55,15 +66,19 @@ def project_complete(request, pk):
 def project_toggle_participate(request, pk):
     project = get_object_or_404(Project, pk=pk)
     if project.owner_id == request.user.id:
-        return JsonResponse({"status": "error"}, status=400)
-    if project.status != "open":
-        return JsonResponse({"status": "error"}, status=400)
+        return JsonResponse(
+            {RESPONSE_STATUS_KEY: RESPONSE_ERROR}, status=HTTPStatus.BAD_REQUEST
+        )
+    if project.status != Project.Status.OPEN:
+        return JsonResponse(
+            {RESPONSE_STATUS_KEY: RESPONSE_ERROR}, status=HTTPStatus.BAD_REQUEST
+        )
     user = request.user
     if project.participants.filter(pk=user.pk).exists():
         project.participants.remove(user)
-        return JsonResponse({"status": "ok", "participant": False})
+        return JsonResponse({RESPONSE_STATUS_KEY: RESPONSE_OK, "participant": False})
     project.participants.add(user)
-    return JsonResponse({"status": "ok", "participant": True})
+    return JsonResponse({RESPONSE_STATUS_KEY: RESPONSE_OK, "participant": True})
 
 
 @login_required
@@ -159,8 +174,7 @@ def users_list(request):
     skill = request.GET.get("skill")
     if skill:
         qs = qs.filter(skills__name=skill).distinct()
-    paginator = Paginator(qs, 12)
-    page = paginator.get_page(request.GET.get("page") or 1)
+    page = paginate_queryset(request, qs)
     all_skills = Skill.objects.order_by("name")
     return render(
         request,
@@ -206,14 +220,14 @@ def skills_autocomplete(request):
     qs = Skill.objects.all()
     if q:
         qs = qs.filter(name__istartswith=q)
-    qs = qs.order_by("name")[:10]
+    qs = qs.order_by("name")[:SKILLS_AUTOCOMPLETE_LIMIT]
     return JsonResponse([{"id": s.pk, "name": s.name} for s in qs], safe=False)
 
 
 def _parse_skill_post(request):
-    if request.content_type and "application/json" in request.content_type:
+    if request.content_type and JSON_CONTENT_TYPE in request.content_type:
         try:
-            return json.loads(request.body.decode() or "{}")
+            return json.loads(request.body.decode() or EMPTY_JSON_OBJECT)
         except json.JSONDecodeError:
             return {}
     return request.POST
@@ -224,7 +238,7 @@ def _parse_skill_post(request):
 def user_skill_add(request, user_id):
     target = get_object_or_404(User, pk=user_id)
     if target.pk != request.user.pk:
-        return JsonResponse({"error": "forbidden"}, status=403)
+        return JsonResponse({"error": ERROR_FORBIDDEN}, status=HTTPStatus.FORBIDDEN)
     data = _parse_skill_post(request)
     raw_skill_id = data.get("skill_id")
     name = (data.get("name") or "").strip()
@@ -235,18 +249,14 @@ def user_skill_add(request, user_id):
         try:
             sid = int(raw_skill_id)
         except (TypeError, ValueError):
-            return JsonResponse({"error": "bad request"}, status=400)
+            return JsonResponse({"error": ERROR_BAD_REQUEST}, status=HTTPStatus.BAD_REQUEST)
         skill = Skill.objects.filter(pk=sid).first()
         if not skill:
-            return JsonResponse({"error": "not found"}, status=404)
+            return JsonResponse({"error": ERROR_NOT_FOUND}, status=HTTPStatus.NOT_FOUND)
     elif name:
-        try:
-            skill, created = Skill.objects.get_or_create(name=name)
-        except IntegrityError:
-            skill = Skill.objects.get(name=name)
-            created = False
+        skill, created = Skill.objects.get_or_create(name=name)
     else:
-        return JsonResponse({"error": "bad request"}, status=400)
+        return JsonResponse({"error": ERROR_BAD_REQUEST}, status=HTTPStatus.BAD_REQUEST)
 
     if target.skills.filter(pk=skill.pk).exists():
         added = False
@@ -267,9 +277,9 @@ def user_skill_add(request, user_id):
 def user_skill_remove(request, user_id, skill_id):
     target = get_object_or_404(User, pk=user_id)
     if target.pk != request.user.pk:
-        return JsonResponse({"error": "forbidden"}, status=403)
+        return JsonResponse({"error": ERROR_FORBIDDEN}, status=HTTPStatus.FORBIDDEN)
     skill = get_object_or_404(Skill, pk=skill_id)
     if not target.skills.filter(pk=skill.pk).exists():
-        return JsonResponse({"error": "not found"}, status=404)
+        return JsonResponse({"error": ERROR_NOT_FOUND}, status=HTTPStatus.NOT_FOUND)
     target.skills.remove(skill)
-    return JsonResponse({"status": "ok"})
+    return JsonResponse({RESPONSE_STATUS_KEY: RESPONSE_OK})

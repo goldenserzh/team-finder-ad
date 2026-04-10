@@ -1,51 +1,22 @@
-import io
 import random
-import re
 import uuid
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
-from django.core.files.base import ContentFile
 from django.db import models
-from PIL import Image, ImageDraw, ImageFont
+from .utils import generate_avatar_image_file, normalize_phone
 
-
-def _contrasting_color(bg):
-    r, g, b = bg
-    if r + g + b > 380:
-        return (40, 40, 40)
-    return (250, 250, 250)
-
-
-def generate_avatar_image_file(letter: str) -> ContentFile:
-    letter = (letter or "?").strip()[:1].upper() or "?"
-    size = 200
-    bg = (
-        random.randint(130, 210),
-        random.randint(130, 210),
-        random.randint(130, 210),
-    )
-    img = Image.new("RGB", (size, size), bg)
-    draw = ImageDraw.Draw(img)
-    fill = _contrasting_color(bg)
-    try:
-        font = ImageFont.truetype("arial.ttf", 110)
-    except OSError:
-        font = ImageFont.load_default()
-    bbox = draw.textbbox((0, 0), letter, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    draw.text(((size - tw) / 2, (size - th) / 2 - 4), letter, font=font, fill=fill)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return ContentFile(buf.read(), name=f"avatar_{uuid.uuid4().hex}.png")
+PHONE_PLACEHOLDER_ATTEMPTS = 500
+PHONE_DIGITS_COUNT = 10
+PHONE_PREFIX = "+7"
+PROJECT_STATUS_MAX_LENGTH = 6
 
 
 class UserManager(BaseUserManager):
     def _unique_placeholder_phone(self):
-        for _ in range(500):
-            digits = "".join(str(random.randint(0, 9)) for _ in range(10))
-            candidate = f"+7{digits}"
+        for _ in range(PHONE_PLACEHOLDER_ATTEMPTS):
+            digits = "".join(str(random.randint(0, 9)) for _ in range(PHONE_DIGITS_COUNT))
+            candidate = f"{PHONE_PREFIX}{digits}"
             if not User.objects.filter(phone=candidate).exists():
                 return candidate
         raise RuntimeError("Could not allocate unique phone placeholder")
@@ -119,6 +90,10 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 class Project(models.Model):
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     owner = models.ForeignKey(
@@ -129,8 +104,8 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     github_url = models.URLField(blank=True)
     status = models.CharField(
-        max_length=6,
-        choices=[("open", "Open"), ("closed", "Closed")],
+        max_length=PROJECT_STATUS_MAX_LENGTH,
+        choices=Status.choices,
     )
     participants = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
@@ -145,12 +120,3 @@ class Project(models.Model):
         return self.name
 
 
-PHONE_RE = re.compile(r"^(\+7|8)(\d{10})$")
-
-
-def normalize_phone(value: str) -> str:
-    value = (value or "").strip()
-    m = PHONE_RE.match(value)
-    if not m:
-        return value
-    return "+7" + m.group(2)

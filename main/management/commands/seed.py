@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand
 
 from main.models import Project, Skill, User
 
+PROJECT_STATUS_OPEN = Project.Status.OPEN
 
 class Command(BaseCommand):
     help = "Создаёт тестовых пользователей, навыки и проекты"
@@ -71,7 +72,7 @@ class Command(BaseCommand):
                     "для совместной работы над pet-проектами."
                 ),
                 "owner": created_users[0],
-                "status": "open",
+                "status": PROJECT_STATUS_OPEN,
             },
             {
                 "name": "Code Review Bot",
@@ -80,7 +81,7 @@ class Command(BaseCommand):
                     "pull-request'ов с использованием AI."
                 ),
                 "owner": created_users[1],
-                "status": "open",
+                "status": PROJECT_STATUS_OPEN,
             },
             {
                 "name": "Портфолио-генератор",
@@ -89,7 +90,7 @@ class Command(BaseCommand):
                     "портфолио из GitHub-профиля разработчика."
                 ),
                 "owner": created_users[2],
-                "status": "open",
+                "status": PROJECT_STATUS_OPEN,
             },
         ]
 

@@ -4,14 +4,21 @@ from django import forms
 from django.contrib.auth.forms import PasswordChangeForm
 from django.core.exceptions import ValidationError
 
-from .models import PHONE_RE, Project, User, normalize_phone
+from .models import Project, User
+from .utils import PHONE_RE, normalize_phone
+
+GITHUB_HOST = "github.com"
+PROJECT_STATUS_CHOICES = (
+    (Project.Status.OPEN, "Открыт"),
+    (Project.Status.CLOSED, "Закрыт"),
+)
 
 
 def validate_github_host(value: str) -> None:
     if not value:
         return
     host = (urlparse(value).netloc or "").lower()
-    if "github.com" not in host:
+    if GITHUB_HOST not in host:
         raise ValidationError("Ссылка должна вести на GitHub.")
 
 
@@ -55,11 +62,7 @@ class EditProfileForm(forms.ModelForm):
 
 
 class ProjectForm(forms.ModelForm):
-    STATUS_CHOICES = (
-        ("open", "Открыт"),
-        ("closed", "Закрыт"),
-    )
-    status = forms.ChoiceField(choices=STATUS_CHOICES, label="Статус")
+    status = forms.ChoiceField(choices=PROJECT_STATUS_CHOICES, label="Статус")
 
     class Meta:
         model = Project
